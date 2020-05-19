@@ -1,0 +1,1080 @@
+---
+title: "Projet STA203"
+author: "Alexandre Bodinier et Corentin SOUBEIRAN"
+date: "27/04/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+rm(list=objects()) ; graphics.off()
+
+#Chargement de l'environnement de travail 
+setwd("C:/Users/csoub/OneDrive/Bureau/DM_STA203/input") # pour Coco
+# getwd() # pour Bodi
+load("music.RData")
+p=ncol(music)
+n = nrow(music)
+
+
+library(corrplot)
+```
+
+```{r,echo=FALSE, fig.width=8,fig.height=4, fig.align='center'}
+calcul_accuracy=function(X_test,Y_test,Y_train,mod){
+  seuil=seq(0,1,0.01)
+  predit=mod$fitted
+  length(predit)
+  length(Y_train)
+  # calcul de la table de classification pour différents seuils
+  accuracy=c()
+  for (s in seuil) {
+    pred=predit>s
+    VP=length(which(pred==Y_train & pred==TRUE))
+    VN=length(which(pred==Y_train &pred==FALSE))
+    FP=length(which(pred!=Y_train & Y_train==FALSE))
+    FN=length(which(pred!=Y_train & Y_train==TRUE)) 
+    tot=VN+VP+FP+FN
+    accuracy=c(accuracy,((VP+VN)/(tot)))
+  }
+  wm=which.max(accuracy)
+  s=seuil[wm]
+  
+  pred=predict(mod, newdata = X_test, type = 'response')>s
+  VP=length(which(pred==Y_test & pred==TRUE))
+  VN=length(which(pred==Y_test &pred==FALSE))
+  FP=length(which(pred!=Y_test & Y_test==FALSE))
+  FN=length(which(pred!=Y_test & Y_test==TRUE)) 
+  tot=VN+VP+FP+FN
+  accuracy_test=((VP+VN)/(tot))
+  return(accuracy_test)
+}
+
+calcul_accuracy_ridge=function(X_test,Y_test,X_train,Y_train,mod,pred_e){
+  seuil=seq(0,1,0.01)
+  predit=predict(mod,s=bestlambda,newx=as.matrix(X_train))
+  # calcul de la table de classification pour différents seuils
+  accuracy=c()
+  for (s in seuil) {
+    pred=predit>s
+    VP=length(which(pred==Y_train & pred==TRUE))
+    VN=length(which(pred==Y_train &pred==FALSE))
+    FP=length(which(pred!=Y_train & Y_train==FALSE))
+    FN=length(which(pred!=Y_train & Y_train==TRUE)) 
+    tot=VN+VP+FP+FN
+    accuracy=c(accuracy,((VP+VN)/(tot)))
+  }
+  wm=which.max(accuracy)
+  s=seuil[wm]
+  pred=pred_e@predictions[[1]]>s
+  VP=length(which(pred==Y_test & pred==TRUE))
+  VN=length(which(pred==Y_test &pred==FALSE))
+  FP=length(which(pred!=Y_test & Y_test==FALSE))
+  FN=length(which(pred!=Y_test & Y_test==TRUE)) 
+  tot=VN+VP+FP+FN
+  accuracy_test=((VP+VN)/(tot))
+  return(accuracy_test)
+}
+```
+
+# Classification supervisée de genres musicaux :
+
+## Partie 1: Analyse des données et régression logistique :
+### 1. Analyse descriptive :
+L'objet de ce projet est la classification supervisée de musiques en fonction de leur genre : Jazz ou Classique. Pour ceci, nous disposons de $6447$ musiques différentes indépendantes, avec $191$ variables qui illustrent 16 paramètres physiques différents. Ces paramètres sont principalement issus de l'analyse spectrale, *cepstral*^[transformation du signal du domaine temporel à un domaine analogue] et temporelle. La répartition des données entre les deux genre est équitable avec $53\%$ de musiques classiques.
+
+```{r}
+summary(music$GENRE)
+```
+
+#### Analyse uni et bi-varié :
+ L'analyse univariée du jeu de données à l'aide de la fonction ```summary``` révèle des ordres de grandeurs très différents entre les variables (du fait que les paramètres physiques mesurés n'aient pas la même dimension). Cet ordre de grandeur va de $10^4$ par exemple pour le *centroïde spectral*^[spectral centroïd : centre de gravité spectral du signal, il représente le poids relatif des fréquences aiguës et graves], $10^0$ par exemple pour *l'enveloppe spectrale*^[ASE (audio spectrum enveloppe): courbe fréquence/amplitude du signal] et $10^{-4}$ pour la *planaité spectral*^[SFM: spectral flatness measure, qui représente le rapport signal sur bruit en dB].
+
+L'analyse des corrélations à l'aide de la fonction ```corrplot``` montre des corrélations fortes autour de la diagonale, ce qui implique que les variables sont, de proche en proche, corrélées dans le jeu de données. Ceci est dû, comme nous l'expliquerons dans la suite, à la continuité du spectre. On trouve également un bon nombre de variables anticorrélées. Le fait que des variables soient trés correlées ou le contraire, peut amener à se demander si une reduction de dimension ne serait pas utile afin d'éviter un phénomène de *sur-apprentissage* ou de *non convergence* se traduisant par une variance élevée du modèle dû à la *sur-paramétrisation*.
+
+#### Transformations log :
+Les paramètres *PAR_SC_V* et *PAR_ASC_V* correspondent respectivement à la variance du centroïde spectral et du centroïde du spectre audio. En regardant les données:
+
+```{r, echo=FALSE, fig.width=8,fig.height=4, fig.align='center'}
+print("variance SC:",quote=FALSE)
+summary(music$PAR_SC_V)
+print("variance ASC:",quote=FALSE)
+summary(music$PAR_ASC_V)
+par(mfrow=c(1,2))
+boxplot(music$PAR_SC_V,ylab="variance de fréquence", xlab="SC_V")
+boxplot(music$PAR_ASC_V,ylab="variance de fréquence", xlab="ASC_V")
+```
+
+On remarque une forte étendue, confirmée par la médiane plus proche du minimum et par l'écrasement du ```boxplot```.
+
+En effet, en observant *SC_V* par exemple, on remarque une abondance de données pour les faibles valeurs de variance et quelques données de très forte variance. On remarque que la transformation log permet d'uniformiser la répartition des données. Il en est de même pour *ASC_V*.
+
+Ainsi cette transformation rend utilisables les variables, et leurs répartitions plus exploitables.
+```{r, echo=FALSE, fig.width=8,fig.height=4, fig.align='center'}
+X=sort(music$PAR_SC_V) #je trie les donn?es en fonction de leur valeur
+par(mfrow=c(1,2))
+plot(X,ylab="variance") #on remarque que beaucoup de donn?es on de faibles valeurs et que quelques une ont des valeurs tr?s ?lev?
+title("Données triés de SC")
+plot(log(X),ylab="variance log") #on remarque que beaucoup de donn?es on de faibles valeurs et que quelques une ont des valeurs tr?s ?lev?
+title("Données triés de SC passés au log")
+```
+```{r, echo=FALSE, fig.width=8,fig.height=4, fig.align='center'}
+par(mfrow=c(1,2))
+boxplot(log(music$PAR_SC_V),ylab="log variance de fréquence", xlab="SC_V")
+boxplot(log(music$PAR_ASC_V),ylab="log variance de fréquence", xlab="ASC_V")
+```
+#### Variables 148 à 167 :
+On remarque que les variables 128-147 sont fortement corrélées ($>99.9\%$) aux variables 148-167 une à une. Ce qui est confirmé dans l'annexe: les paramètres sont les mêmes ! Ces variables sont donc inutiles à priori puisqu'elles ne sont qu'une répétition. 
+
+#### Analyse appronfondie de certaines variables
+  Lors de l'analyse des correlations des variables, on remarque que pour un même paramètre, les correlations sont fortes, par exemple pour les variables du paramètre ASE. La correlation entre les variables PAR_ASE33 et PAR_ASE34 est de plus de $99,9\%$ : il n'y a donc pas d'intérêt de garder les deux pour l'étude. <br/>
+  
+Les "ASE" représentent la forme de l'enveloppe spectrale. Il est donc normal que les variables soient similaires de proche en proche puisqu'il s'agit de bandes voisines. Ici la corrélation rend compte d'un phénomène physique : la continuité du spectre. Intuitivement on pourrait penser qu'il y ait deux familles de spectres, une certaine forme pour le Jazz et une autre pour le Classique, et alors on pourrait séparer les genres par leur forme de spectre ? Malheureusement, on voit que ce n'est pas un très bon séparateur puisque il existe des morceaux qui ont un spectre similaire et un genre pourtant différent (*cf. spectres 2 et 5* sur la figure suivante). C'est notamment pourquoi nous allons utiliser des agrégats (moyennes, variances, moyenne des variances) : (*cf suite*).
+      
+```{r,, echo=FALSE, fig.width=5,fig.height=5, fig.align='center'}
+par(mfrow=c(1,1))
+M=music[,4:38]
+names(M)=c(seq(1:34),"avr")
+M=cor(M)
+corrplot(M,method = "circle",type="upper", tl.col="black", tl.srt=90,tl.cex = 0.6,main="\n Correlation entre les variables d'ASE")
+```
+```{r}
+# Pour se faire une idée :
+      s = seq(0, 34)
+      jazz = which(music$GENRE == 'Jazz')
+      classique = which(music$GENRE == 'Classical')
+      par(mfrow=c(2,4))
+      for (i in seq(1, 4) ) {
+        plot(s, music[jazz[i+100], 4:38], main=paste("spectre n°",i, '(jazz)', sep=' '), xlab = "fréquence", ylab="amplitude (dB)", pch=20)
+      }
+      for (i in seq(1, 4) ) {
+        plot(s, music[classique[i+100], 4:38], main=paste("spectre n°",i+4, '(classical)', sep=' '), xlab = "fréquence", ylab="amplitude (dB)", pch=20)
+      }
+```
+
+Représentons maintenant les diagrammes en moustache des différentes variables proposées: *TC*,*SC*,*SC_V* (et nous utiliseront plus précisément le *SC_V log* pour les raisons déjà citées),*ASE_M*, *ASE_V*,*SFM_M* et *SFM_V*. Ces données correspondent aux agrégats de variables pour les différents paramètres. Certains agrégats sont un bon levier de séparation puisqu'on observe des répartitions clairement distinctes (en termes de moyenne, quartiles, variance, étendue), notamment pour la *SFM_M*. Pour d'autres, c'est moins le cas (exmple de PAR_TC).
+```{r, echo=FALSE, fig.width=8,fig.height=4, fig.align='center'}
+par(mfrow=c(1,3))
+boxplot(music[, 1]~ music$GENRE, xlab='', ylab='répartition', main='TC') #TC
+
+boxplot(music[, 2]~music$GENRE, xlab='', ylab='répartition',main='SC') # SC
+
+#boxplot(music[, 3]~music$GENRE, xlab='', ylab='répartition') # pas reprÃ©sentatif : log transformation
+
+boxplot(log(music[, 3])~music$GENRE, xlab='', ylab='répartition', main='SC_V log') # SC_V
+
+# influence des ASE
+par(mfrow=c(1,2))
+boxplot(music[, 38] ~ music$GENRE, main="ASE_M", ylab="répartition", xlab='') # ASE_M
+boxplot(music[, 73] ~ music$GENRE, main="ASE_V", ylab="répartition", xlab='') # ASE_V
+
+# influence des SFM
+par(mfrow=c(1,2))
+boxplot(music[, 102]~music$GENRE, main='SFM_M', ylab='répartition', xlab='') # SFM_M semble Ãªtre un bon critÃ¨re
+boxplot(music[, 127]~music$GENRE, main='SFM_V', ylab='répartition', xlab='') # SFM_V
+```
+
+#### Bilan :
+Ainsi il semble que:
+
+- Les variables 148 à 167 sont à retirer du modèle.
+
+- On peut passer au log les variables SC_V et ACV_V pour plus de significativité.
+
+- Les ASE individuelles (4-37) ne sont pas forcément différentes pour les deux genres en question, d'où la nécessité d'utiliser des agrégats (ASE_M, ASE_V, ...). Les corrélations rendent compte d'une phénomène physique.
+
+- Il en est de même pour ASE_V 39-72, SFM 78-101, SFM 103-126.
+
+- Nous n'avons pas de données manquantes.
+
+- Nous n'avons vraisemblablement pas de valeurs aberrantes.
+
+#### Modèle Logistique :
+Hypothèses du modèle logistique:
+
+- Nous sommes bien dans un cadre de classification binaire : $\Omega=\{Classique,Jazz\}$.
+
+- Nos variables sont indépendantes : on peut légitimement supposer l'indépendance entre chaque morceau.
+
+- Pour appliquer ce modèle il faut $N_{echantillon} >> N_{variables}$. Ici nous avons un facteur 300, ce qui est suffisant. 
+
+- Pour ce  qui est de la robustesse il faudra prêter attention aux variables sensibles.   
+
+#### Approfondissement :
+Avant de lancer un quelconque calcul, nous devons établir des modèles :
+
+- Un premier modèle ne conservant que certains agrégats : ce sera le modèle *Mod0*.
+- Un modèle avec beaucoup plus de variables, ces variables seront sélectionnées par intuition et déduction en observant notre jeu de données, en faisant des recherches sur la signification des différents paramètres et en se documentant sur le sujet. (On rassemble le plus de connaissances "terrain"). Ce sera notre modèle *ModT*.
+- Afin de raffiner ce modèle T, nous allons nous séparer de variables en conservant que celles qui sont significatives à 5% c'est le modèle *Mod1*.
+- Un modèle *Mod2* sera extrapolé de ModT en conservant les variables significatives à 20%.
+- Un dernier modèle avec sélection par méthode AIC stepwise : ce sera *MoDAIC*
+- Pour chacun des modèles, on utilisera un seuil $s$ de décision maximisant l'$accuracy$, sans prendre en compte la $spécificité$ ou bien la $significativité$.
+
+```{r, echo=FALSE, fig.width=5,fig.height=5, fig.align='center', fig.show='hide',results='hide'}
+# PCA pour selectionner les variables :
+
+library(FactoMineR)
+  par(mfrow=c(1,1))
+  res = PCA(music[,-p])
+  round(res$eig,4) # variance de chacun des 7 axes
+```
+```{r, echo=FALSE, fig.width=10,fig.height=6, fig.align='center'}
+barplot(res$eig[,2],main="% inertie",names=paste("Dim",1:nrow(res$eig)), ylab="% inertie", xlab='dim')
+  abline(h=100/sum(res$eig[,1]),lty=2,col='blue' )  
+  abline(h = 2.5, col='red', lty=3)
+  abline(v=42, col = 'blue', lty=3)
+  abline(v=8, col = 'red', lty=3)
+  legend("topright", legend = c('règle du coude', '100/sum(vp)'), col = c('red', 'blue'), lty =1:2)
+```
+
+### 2. Définition de l'échantillon d'apprentissage :
+Pour la suite, nous avons besoin de transformer le genre en variable binaire : False = Jazz, True = classique (n'y voyez aucun jugement de valeur)
+```{r, echo=TRUE}
+  set.seed(103)
+  train=sample(c(TRUE, FALSE), n, rep=TRUE, prob=c(2/3, 1/3)) 
+  Y = music$GENRE == 'Classical'
+```
+### 3. Estimation des modèles :
+
+#### Modèle 0 :
+Dans ce modèle nous considérerons les variables agrégés suivantes (TC,SC,SC V,ASE M,ASE MV,SFM M,SFM MV).
+
+
+```{r, echo=FALSE, fig.width=8,fig.height=4, fig.align='center'}
+  Mod0.var = c("PAR_TC", "PAR_SC", "PAR_SC_V", "PAR_ASE_M", "PAR_ASE_MV", "PAR_SFM_M", "PAR_SFM_MV")
+  X_subset = music[Mod0.var] 
+  
+  # PrÃ©paration des donnÃ©es (train, test)
+  
+  Y = music$GENRE == 'Classical'
+  X_train = X_subset[train,]
+  Y_train = Y[train]
+  X_test = X_subset[!train,]
+  Y_test = Y[!train]
+
+  #Apprentissage du modÃ¨le
+  Mod0 = glm( Y_train ~ ., family=binomial, data=X_train ) 
+  A=calcul_accuracy(X_test, Y_test, Y_train, Mod0)
+  summary(Mod0)
+```
+
+```{r}
+  library(ROCR) 
+  library(ggplot2)
+  # Evaluation :
+  genres_predicted_proba = predict(Mod0, newdata = X_test, type = 'response')
+  genres_predicted = genres_predicted_proba >= 0.5
+  mod0.res.test = data.frame(yt=Y_test, pred = genres_predicted)
+  
+  genres_predicted_proba = predict(Mod0, newdata = X_train, type = 'response')
+  genres_predicted = genres_predicted_proba >= 0.5
+  mod0.res.train = data.frame(yt=Y_train, pred = genres_predicted)
+  mod0.accu = c(train = sum( (mod0.res.train$yt == mod0.res.train$pred) / sum(Y_train+ !Y_train) )*100 , test=A*100)
+  
+  pred0.train = prediction(predict(Mod0, newdata = X_train, type = 'response'), Y_train)
+  pred0.test = prediction(predict(Mod0, newdata = X_test, type = 'response'), Y_test)
+  
+  
+  perf0.train = performance(pred0.train, measure = 'tpr', x.measure = 'fpr')
+  perf0.test = performance(pred0.test, measure = 'tpr', x.measure = 'fpr')
+  
+  perf0.test.auc = performance(pred0.test, "auc")
+  auc0 = round(perf0.test.auc@y.values[[1]], 3)
+
+  # plot(perfT.test)
+```
+
+#### Modèle T :
+C'est ici que nous avons dû nous documenter pour acquérir des "connaissances terrain". Ainsi, nous avons développé une certaine intuition quant aux variables à conserver (notaments les agrégats, mais aussi des ASE pour des bandes de basse fréquence, des mesures RMS, des mesures SFM).
+Nous avons fait de la *data visualisation* pour consolider nos intuitions et pour observer quelles variables séparaient le mieux les deux genres. <br/>
+
+Nous nous sommes ensuite interrogés sur les résultats qu'une PCA^[Principal component analysis] pourrait nous fournir. Cette méthode à pour but de déterminer les axes principaux d'un jeu de donnée (combinaison linéaire de variables expliquant le mieux le jeu de données).
+En apliquant la règle de coude, on conserverait 7 combinaisons de variables qui d'ailleurs ont l'air de correspondre à celles du *modèle 0* (en terme de qualité de représentation et de contribution).
+En appliquant le critère $\frac{100}{\sum{\lambda_i}}$ nous sommes tentés de conserver les 42 premiers axes principaux. Afin de retrouver quelles variables sélectionner, nous allons regarder lesquelles sont les mieux représentées et les plus contributives aux premiers axes principaux. Il s'agit de : 
+
+- PAR_SFM_M, PAR_SFM_MV
+
+- PAR_SC, PAR_SC_V
+
+- PAR_ASE_M, PAR_ASE_MV
+
+- PAR_ASC, PAR_ASC_V
+
+- PAR_PEAK_RMS_TOT
+
+- PAR_ASS_V
+
+- PAR_ASE1 à 8, PAR_ASE23-24 et PAR_ASE30
+
+- PAR_THR_3RMS_TOT, PAR_THR_2RMS_TOT, PAR_THR_1RMS_TOT
+
+- PAR_SFMV16, PAR_SFMV15
+
+On retrouve un premier jeu de variables, correspondant aux variables agrégés. Cela conforte l'observation que nous avons fait sur ces variables. Un second jeu correspond à des $ASE$ ou $SFMV$ pour certaines portion du spectre (basses fréquences, et hautes fréquences pour ASE, ce qui confirme l'intuition : les instruments des deux genres étant différents (plus de batteries, notament de cymbales pour le jazz, ce qui contribue aux hautes fréquences. Les différences de timbre des intruments s'expriment dans les basses et les aigus). 
+C'est cet ensemble de 26 varaibles qui formera notre *modèle T*
+
+
+
+```{r}
+ModT.var = c("PAR_SFM_M", "PAR_SC", "PAR_ASE1", "PAR_ASE2", "PAR_ASE3", "PAR_ASE4","PAR_ASE5","PAR_ASE6","PAR_ASE7","PAR_ASE8","PAR_ASE24", "PAR_ASE30","PAR_ASE23", "PAR_ASC", "PAR_ASC_V", "PAR_SFM_MV", "PAR_ASE_M", "PAR_ASE_MV", "PAR_PEAK_RMS_TOT", "PAR_ASS_V", "PAR_THR_3RMS_TOT", "PAR_THR_2RMS_TOT", "PAR_THR_1RMS_TOT", "PAR_SC_V", "PAR_SFMV16", "PAR_SFMV15")
+  
+  X_subset = music[ModT.var] 
+  Y = music$GENRE == 'Classical'
+  X_train = X_subset[train,]
+  Y_train = Y[train]
+  X_test = X_subset[!train,]
+  Y_test = Y[!train]
+  
+  ModT = glm( Y_train ~ ., family=binomial, data=X_train ) 
+  summary(ModT) 
+  
+```
+
+```{r}
+# Evaluation :
+  genres_predicted_proba = predict(ModT, newdata = X_test, type = 'response')
+  genres_predicted = genres_predicted_proba >= 0.5
+  modT.res.test = data.frame(yt=Y_test, pred = genres_predicted)
+  
+  genres_predicted_proba = predict(ModT, newdata = X_train, type = 'response')
+  genres_predicted = genres_predicted_proba >= 0.5
+  modT.res.train = data.frame(yt=Y_train, pred = genres_predicted)
+  
+  modT.accu = c(train = sum( (modT.res.train$yt == modT.res.train$pred) / sum(Y_train+ !Y_train) )*100 , test= calcul_accuracy(X_test, Y_test, Y_train, ModT)*100)
+  
+  predT.test = prediction(predict(ModT, newdata = X_test, type = 'response'), Y_test)
+  perfT.test = performance(predT.test, measure = 'tpr', x.measure = 'fpr')
+  
+  predT.train = prediction(predict(ModT, newdata = X_train, type = 'response'), Y_train)
+  perfT.train = performance(predT.train, measure = 'tpr', x.measure = 'fpr')
+  
+  perfT.train.auc = performance(predT.train, "auc")
+  perfT.test.auc = performance(predT.test, "auc")
+  
+  aucT.train = round(perfT.train.auc@y.values[[1]], 3)
+  aucT.test = round(perfT.test.auc@y.values[[1]], 3)
+  
+  # plot(perfT.train)
+```
+### Modèle 1 :
+Pour *Mod1* nous ne conservons que les variables significatives à 5%. Cependant, ce n'est pas une très bonne méthode, puis que le fait d'enlever des variables modifie l'ensemble des résultats ainsi, il est possible qu'il reste tout de même des variables non significatives après la réduction. C'est justement ceci qui justifieras l'utilisation de la méthode AIC.
+```{r}
+ Mod1.var = c("PAR_SFM_M", "PAR_SC","PAR_ASE24","PAR_ASE1", "PAR_ASE2", "PAR_ASE3", "PAR_ASE4","PAR_ASE7", "PAR_ASE30","PAR_ASE23", "PAR_ASC", "PAR_SFM_MV", "PAR_ASE_M", "PAR_ASE_MV", "PAR_ASS_V", "PAR_THR_2RMS_TOT", "PAR_THR_1RMS_TOT", "PAR_SC_V", "PAR_SFMV15")
+  X_subset = music[Mod1.var] 
+  Y = music$GENRE == 'Classical'
+  
+  X_train = X_subset[train,]
+  Y_train = Y[train]
+  X_test = X_subset[!train,]
+  Y_test = Y[!train]
+  
+  Mod1 = glm( Y_train ~ ., family=binomial, data=X_train ) 
+  summary(Mod1) #? voir mais TC semble poser un peu PB ainsi que MV, mais on ne peut pas ? ce stade d?cider de l'?liminer comme ?a pour l'?liminer il faut utiliser des crit?res, ou appliquer un Fwd / Bwd ou mixte (Tp11)
+  
+```
+
+```{r}
+  genres_predicted_proba = predict(Mod1, newdata = X_test, type = 'response')
+  genres_predicted = genres_predicted_proba >= 0.5
+  mod1.res.test = data.frame(yt=Y_test, pred = genres_predicted)
+  
+  genres_predicted_proba = predict(Mod1, newdata = X_train, type = 'response')
+  genres_predicted = genres_predicted_proba >= 0.5
+  mod1.res.train = data.frame(yt=Y_train, pred = genres_predicted)
+  
+  mod1.accu = c(train = sum( (mod1.res.train$yt == mod1.res.train$pred) / sum(Y_train+ !Y_train) )*100 , test= calcul_accuracy(X_test, Y_test, Y_train, Mod1)*100)
+  
+  pred1.test = prediction(predict(Mod1, newdata = X_test, type = 'response'), Y_test)
+  perf1.test = performance(pred1.test, measure = 'tpr', x.measure = 'fpr')
+  
+  perf1.test.auc = performance(pred1.test, "auc")
+  auc1 = round(perf1.test.auc@y.values[[1]], 3)
+  
+  # plot(perf1.test)
+```
+
+### Modèle 2 :
+Même remarque que pour *mod1*, il n'est pas judicieux de procéder de la sorte (retirer l'ensemble des variables non significatives). On remarque dans les résultats que ces méthodes ne sont pas performantes (réduction de la précision). Et il reste encores des variables non significatives (SFMV16 par exemple).
+```{r}
+  Mod2.var = c("PAR_SFM_M", "PAR_SC","PAR_ASE24", "PAR_ASE5", "PAR_ASE30","PAR_ASE23", "PAR_ASC", "PAR_ASC_V", "PAR_SFM_MV", "PAR_ASE_M", "PAR_ASE_MV", "PAR_PEAK_RMS_TOT", "PAR_ASS_V", "PAR_THR_3RMS_TOT", "PAR_THR_2RMS_TOT", "PAR_THR_1RMS_TOT", "PAR_SC_V", "PAR_SFMV16", "PAR_SFMV15")
+  X_subset = music[Mod2.var] 
+  Y = music$GENRE == 'Classical'
+  
+  X_train = X_subset[train,]
+  Y_train = Y[train]
+  X_test = X_subset[!train,]
+  Y_test = Y[!train]
+  
+  Mod2 = glm( Y_train ~ ., family=binomial, data=X_train ) 
+  summary(Mod2) #? voir mais TC semble poser un peu PB ainsi que MV, mais on ne peut pas ? ce stade d?cider de l'?liminer comme ?a pour l'?liminer il faut utiliser des crit?res, ou appliquer un Fwd / Bwd ou mixte (Tp11)
+  
+```
+
+```{r}
+genres_predicted_proba = predict(Mod2, newdata = X_test, type = 'response')
+  genres_predicted = genres_predicted_proba >= 0.5
+  mod2.res.test = data.frame(yt=Y_test, pred = genres_predicted)
+  
+  genres_predicted_proba = predict(Mod2, newdata = X_train, type = 'response')
+  genres_predicted = genres_predicted_proba >= 0.5
+  mod2.res.train = data.frame(yt=Y_train, pred = genres_predicted)
+  
+  mod2.accu = c(train = sum( (mod2.res.train$yt == mod2.res.train$pred) / sum(Y_train+ !Y_train) )*100 , test= calcul_accuracy(X_test, Y_test, Y_train, Mod2)*100)
+  
+  pred2.test = prediction(predict(Mod2, newdata = X_test, type = 'response'), Y_test)
+  perf2.test = performance(pred2.test, measure = 'tpr', x.measure = 'fpr')
+  
+  perf2.test.auc = performance(pred2.test, "auc")
+  auc2 = round(perf2.test.auc@y.values[[1]], 3)
+  
+  # plot(perf2.test)
+```
+
+### Modèle AIC :
+L'objectif est de raffiner le modèle pas à pas. On souhaite diminuer le nombre de variables à prendre en compte afin de réduire le biais de notre estimateur. Pour se faire, on va pénaliser la déviance du modèle avec $2K$, $K$ étant le nombre de variables du modèle. N'oublions pas de préciser qu'il est important de vérifier la cohérence des résultats donnés par la méthode (les variables sélectionnées), il est impossible de se fier les yeux fermés à un programme informatique. 
+```{r,echo=FALSE, fig.width=5,fig.height=5, fig.align='center', fig.show='hide',results='hide'}
+ #stepwise AIC
+ library(MASS)
+ library(dplyr)
+ data=music[,-p]
+ data=data[,-167:-148]
+ X_train = data[train,]
+ Y_train = Y[train]
+ X_test = data[!train,]
+ Y_test = Y[!train]
+
+ ModAIC = glm(Y_train ~., data = X_train, family = binomial) %>% stepAIC(trace = TRUE, direction = "forward") #AIC
+ summary(ModAIC) # On voit que la mÃ©thode a Ã©liminÃ© les variables que l'on avait choisies en ModÃ¨le ModT (SC, TC, SFM_MV) #(C) bingo
+ plot(ModAIC)
+```
+
+```{r,echo=FALSE}
+# Validation :
+  genres_predicted_proba = predict(ModAIC, newdata = X_test, type = 'response')
+  genres_predicted = genres_predicted_proba >= 0.5
+  modAIC.res.test = data.frame(yt=Y_test, pred = genres_predicted)
+  
+  genres_predicted_proba = predict(ModAIC, newdata = X_train, type = 'response')
+  genres_predicted = genres_predicted_proba >= 0.5
+  modAIC.res.train = data.frame(yt=Y_train, pred = genres_predicted)
+  
+  modAIC.accu = c(train = sum( (modAIC.res.train$yt == modAIC.res.train$pred) / sum(Y_train+ !Y_train) )*100 , test= calcul_accuracy(X_test, Y_test, Y_train, ModAIC)*100)
+  
+  predAIC = prediction(predict(ModAIC, newdata = X_test, type='response'), Y_test)
+  perfAIC = performance(predAIC, measure = 'tpr', x.measure = 'fpr')
+  
+  perfAIC.auc = performance(predAIC, "auc")
+  aucAIC = round(perfAIC.auc@y.values[[1]],3)
+  
+  # plot(perfAIC)
+```
+
+## Question 4 : Visualisation des résultats
+
+Nous allons maintenant comparer les différents tests en superposant leur courbes *ROC*, calculées sur l'échantillon de test.
+```{r,echo=FALSE, fig.width=10,fig.height=7, fig.align='center'}
+
+  ###################
+  # Le ModT en dÃ©tail :
+  ###################
+  
+  # predT.train = prediction(predict(ModT, newdata = X_train, type = 'response'), Y_train)
+  # predT.test = prediction(predict(ModT, newdata = X_test, type = 'response'), Y_test)
+  # 
+  # perfT.train = performance(predT.train, measure = 'tpr', x.measure = 'fpr')
+  # perfT.test = performance(predT.test, measure = 'tpr', x.measure = 'fpr')
+  # 
+  # plot(perfT.train)
+  # plot(perfT.test)
+  # 
+  # 
+  # res = data.frame(mod0 = mod0.res, modT = modT.res$pred, mod1 = mod1.res$pred, mod2 = mod2.res$pred)
+  # res
+  
+  ###################
+  # Multi ROC :
+  ###################
+  
+  plot(perf0.test, col=1)
+  plot(perfT.test, col=2, add=TRUE)
+  plot(perf1.test, col=3, add=TRUE)
+  plot(perf2.test, col=4, add=TRUE)
+  plot(perfAIC, col=5, add=TRUE)
+  lines(c(0,1),c(0,1),col=3,lty=2)                        # prédicteur aléatoire
+  segments(c(0,0),c(0,1),c(0,1),c(1,1),lty=3,lwd=2,col=2) # prédicteur parfait
+  legend("bottomright", legend = c(paste('Mod0',auc0), paste('ModT', aucT.test), paste('Mod1', auc1), paste('Mod2', auc2), paste('ModAIC', aucAIC), "règle aléatoire","modèle parfait"), col=c(1:5,3,2), lty=c(1,1,1,1,1,2,2))
+  
+```
+Nous pouvons tout d'abord à partir des résultats des regressions, comparer les modèles en fonction du *Akaike Information Criterion*, nous remarquons alors que ce critère classe de la même manière les modèles que le critère de comparaison global des courbes ROC (aire sous courbe ou *AUC*).
+
+```{r,echo=FALSE, fig.width=5,fig.height=5, fig.align='center'}
+result_mod=data.frame(cbind(c("Mod0","ModT","Mod1","Mod2","ModAIC"),
+                             round(c(Mod0$aic,ModT$aic,Mod1$aic,Mod2$aic,ModAIC$aic),0),
+                             round(c(mod0.accu[2],modT.accu[2],mod1.accu[2],mod2.accu[2],modAIC.accu[2]),1)))
+names(result_mod)=c("Modèle","AIC","Accuracy")
+print(result_mod)
+```
+Le modèle qui semble le plus pertinent est celui trouvé par le ```stepAIC``` qui se compose de 141 variables. Bien que ce modèle conserve de nombreuses variables, dont certaines très corrélées, il permet d'atteindre des performances proches de $97\%$ au sens *AUC*. Notons également que le modèle *ModT* est meilleur que les modèles *Mod1* et *Mod2*. En pratique cette méthode d'élimination de variable en fonction de la p-value est une mauvaise pratique à remplacer par une procedure de selection de variables pas à pas par *forward*, *backward* ou *stepwise (methode mixte)* sur critère $AIC$ ou $BIC$.
+
+## Question 5 :
+
+On calcule maintenant l'erreur sur les échantillons d'apprentissage et de test :
+
+```{r,echo=FALSE, fig.width=5,fig.height=5, fig.align='center'}
+  par(mfrow=c(3,2))
+  bp = barplot(mod0.accu, ylim=c(70, 90), width = 0.5, main='Mod0', ylab='accuracy')
+  text(bp, 80, round(mod0.accu, 2))
+  bp = barplot(modT.accu, ylim=c(70, 90), width = 0.5, main='ModT', ylab='accuracy')
+  text(bp, 85, round(modT.accu, 2))
+  bp = barplot(mod1.accu, ylim=c(70, 90), width = 0.5, main='Mod1', ylab='accuracy')
+  text(bp, 85, round(mod1.accu, 2))
+  bp = barplot(mod2.accu, ylim=c(70, 90), width = 0.5, main='Mod2', ylab='accuracy')
+  text(bp, 85, round(mod2.accu, 2))
+  bp = barplot(modAIC.accu, ylim=c(70, 90), width = 0.5, main='ModAIC', ylab='accuracy')
+  text(bp, 85, round(modAIC.accu, 2))
+  par(mfrow=c(1,1))
+```
+
+On remarque ainsi que le taux de bonnes réponses sur l'ensemble de test est proche de celle sur notre ensemble de validation. Cela signifie que l'on a évité le $sur-apprentissage$. Là où l'écart est le plus important est pour le modèle AIC, ce est logique puisque c'est le plus paramétrisé.
+
+A ce stade, on choisit le modèle **ModAIC**. Intéressons nous à son adéquation. 
+Le résultat du ```summary(ModAic)``` donne une déviance résiduelle de $1573.7$  avec $4051$ degrés de liberté. On calcul alors le quantile du Khi2 à $4051$ ddl pour $\alpha=5\%$:
+```{r,echo=TRUE}
+qchisq(0.95,4051)
+```
+
+Ce quantile est plus grand que la déviance résiduelle, par conséquent on conserve $H0$ (le modèle). Il est donc adéquat avec un risque de seconde espèce inconnu.
+
+## Partie 2: Algorithme des K plus proches voisins :
+
+### 1. KNN :
+La methode des KNN (k-nearest neighbors) est une methode de classification supervisée. <br/>
+
+Elle consiste à classer un individu non labélisé (en espace de dimension p = le nombre de paramètres) en fonction de la classe de ses k plus proches voisins labélisés. "Proche" est à prendre au sens de la norme euclidienne.
+
+Autrement dit : à partir d'un jeu de données labellisé (le set d'apprentissage), on attribue un label aux individus d'un jeu inconnu en fonction de leur position dans l'espace. C'est la stratégie de "qui se ressemble s'assemble".
+Dans le cas ou k=1 on donne à une nouvel individu le label de l'individu le plus proche de l'ensemble d'entrainement.
+Rappelons qu'ici, chaque individu est un morceau de musique.
+
+### 2. Classification avec l'algorithme des KNN :
+
+#### Jeu de données réduit : 
+En utilisant les variables du modèle T, et avec le paramètres k = 1, on obtient une *accuracy* (taux de bonne réponses) de :
+
+```{r, echo=FALSE, fig.width=3,fig.height=3, fig.align='center'}
+library(class)
+
+set.seed(103)
+train=sample(c(TRUE, FALSE), n, rep=TRUE, prob=c(2/3, 1/3)) 
+
+var = c("PAR_SFM_M", "PAR_SC", "PAR_ASE1", "PAR_ASE2", "PAR_ASE3", "PAR_ASE4","PAR_ASE5","PAR_ASE6","PAR_ASE7","PAR_ASE8","PAR_ASE24", "PAR_ASE30","PAR_ASE23", "PAR_ASC", "PAR_ASC_V", "PAR_SFM_MV", "PAR_ASE_M", "PAR_ASE_MV", "PAR_PEAK_RMS_TOT", "PAR_ASS_V", "PAR_THR_3RMS_TOT", "PAR_THR_2RMS_TOT", "PAR_THR_1RMS_TOT", "PAR_SC_V", "PAR_SFMV16", "PAR_SFMV15")
+X_subset = music[var] 
+X_subset$PAR_SC_V=log(X_subset$PAR_SC_V)
+X_subset$PAR_ASC_V=log(X_subset$PAR_ASC_V)
+X_subset = scale(X_subset)
+
+Y = music$GENRE
+Y = music$GENRE == 'Classical'
+X_train = X_subset[train,]
+Y_train = Y[train]
+X_test = X_subset[!train,]
+Y_test = Y[!train]
+
+res.knn=knn(X_train,X_test,cl=Y_train,k=1)
+print(paste0("Accuracy=",sum(res.knn==Y_test)/length(Y_test)*100),quote=FALSE)    
+``` 
+On peut alors dresser la matrice de confusion de cette prédiction :
+```{r, echo=FALSE, fig.width=3,fig.height=3, fig.align='center'}
+##Approfondissement
+m=length(Y_test)
+VP=length(which(res.knn==Y_test & res.knn==TRUE))
+VN=length(which(res.knn==Y_test & res.knn==FALSE))
+FP=length(which(res.knn==TRUE & Y_test==FALSE))
+FN=length(which(res.knn==FALSE & Y_test==TRUE)) 
+tc=data.frame(rbind(c(VP,FP),c(FN,VN))) 
+
+
+names(tc)=c("V","F")
+tc
+```
+Et calculer des indicateurs comme la spécificité et sensibilité :
+```{r, echo=FALSE, fig.width=3,fig.height=3, fig.align='center'}
+## On peut maintenant s'amuser à comparer les tests en termes de performances mais aussi en terme de qualité: 
+specificite=VN/(FP+VN)*100
+sensibilite=VP/(VP+FN)*100
+print(paste0("sensibilité = ",sensibilite),quote = FALSE)
+print(paste0("spécificité = ",specificite),quote = FALSE)
+```
+
+#### Jeu de données entier :
+Précédemment, nous avons appliqué la methode des KNN au jeu de donnée réduit sur 26 variables mais on pourrait s'intéresser à son resultat sur un jeu de variables bien plus grand, composé des 191 paramètres. On va tout de même retirer les variables 147 à 168 (qui sont des répétitions) et en appliquant la transformation log aux paramètres SC_V et ASC_V :
+```{r, echo=FALSE, fig.width=3,fig.height=3, fig.align='center'}
+library(class)
+X_subset = music[-p]
+X_subset = X_subset[-148:-167] #j'enlève quand meme les répétitions 
+X_subset$PAR_SC_V=log(X_subset$PAR_SC_V)
+X_subset$PAR_ASC_V=log(X_subset$PAR_ASC_V)
+X_subset = scale(X_subset)
+train=sample(c(TRUE, FALSE), n, rep=TRUE, prob=c(2/3, 1/3)) 
+
+Y = music$GENRE == 'Classical'
+X_train = X_subset[train,]
+Y_train = Y[train]
+X_test = X_subset[!train,]
+Y_test = Y[!train]
+res.knn=knn(X_train,X_test,cl=Y_train,k=1)
+print(paste0("Accuracy = ",sum(res.knn==Y_test)/length(Y_test)*100),quote = FALSE)    #63.64, avec plus de variables et le même jeu de données on est 1% meilleurs que le modèle réduit à quelques variables. Le temps de calcul vaut-il le coup ?
+```
+On remarque alors un taux de bonnes réponses $3\%$ plus élevé avec l'ensemble des variables plutot que sur le modèle réduit. Néamoins le temps de calcul est beaucoup plus long, en fonction du domaine d'application ce paramètre est à prendre en compte.
+
+```{r, echo=FALSE, fig.width=3,fig.height=3, fig.align='center'}
+##Approfondissement
+m=length(Y_test)
+VP=length(which(res.knn==Y_test & res.knn==TRUE))
+VN=length(which(res.knn==Y_test & res.knn==FALSE))
+FP=length(which(res.knn==TRUE & Y_test==FALSE))
+FN=length(which(res.knn==FALSE & Y_test==TRUE)) 
+tc=data.frame(rbind(c(VP,FP),c(FN,VN))) 
+
+
+names(tc)=c("V","F")
+tc
+
+## On peut maintenant s'amuser à comparer les tests en termes de performances mais aussi en terme de qualité: 
+specificite=VN/(FP+VN)*100
+sensibilite=VP/(VP+FN)*100
+print(paste0("sensibilité=",sensibilite),quote = FALSE)
+print(paste0("spécificité=",specificite),quote = FALSE)
+```
+Il en va de même pour la sensibilité et la spécificité. 
+
+### 3.Commentaires :
+
+  On remarque que l'utilisation de l'ensemble des variables plutôt qu'une partie, n'améliore que très peu l'erreur puisque l'$accuracy$ reste de l'ordre de 67%. Contrairement aux methodes de classification de la partie 1 ou 3, les KNN ne font pas intervenir de seuil et ne pouvons pas dresser de courbe ROC à proprement parler. En effet la méthode des KNN est une methode déterministe (non-paramètrique).
+  
+De plus, nous pouvons nous interroger sur la pertinence de prendre $k=1$. En effet cela implique que seul le voisin le plus proche influe sur le choix de la classe. Nous pourions vouloir augmenter ce nombre. Cependant que ce soit à partir de toutes les variables^[hors variables 148 à 167 et en passant au log SC_V et ASC_V] ou de celles du modèle T, l'$accuracy$ a une tendance à la baisse avec l'augmentation de k. A titre illustratif nous avons représenté cette accuracy pour les premières valeurs k. On remarque que pour de faibles valeurs de k, le taux est trés variable puis se stabilise par la suite. 
+Cela illustre le "*curse of dimensionality*" : nous avons un nombre élevé des paramètres, et dans cet espace de grande dimension, tous les individus deviennent proches. Le nombre d'individus requis pour avoir un predicteur correct augmente de manière exponentiel avec la dimension.
+
+Nous retenons de cette observation qu'il est préférable de ne considérer qu'un faible nombre de voisins (moins de 10). En l'état nous ne pouvons pas choisir à proprement dit une valeur de k, car nous n'auront alors plus acces à l'erreur de généralisation. Pour cela il est neccéssaire de séparer l'échantillon en 3 parties: apprentissage, validation et test. L'ensemble de validation servant à calculer la valeur de k optimale, et l'ensemble de test à obtenir une erreur de généralisation. Cependant les modèles de la partie 1 utilisent $2/3$ des données pour l'apprentissage et $1/3$ pour le test. 
+
+```{r, echo=FALSE, fig.width=7,fig.height=4, fig.align='center'}
+library(GGally)
+library(corrplot)
+
+ set.seed(103)
+ train=sample(c(TRUE, FALSE), n, rep=TRUE, prob=c(2/3, 1/3))
+ xaxis=seq(1:10)
+
+
+ var = c("PAR_SFM_M", "PAR_SC", "PAR_ASE1", "PAR_ASE2", "PAR_ASE3", "PAR_ASE4","PAR_ASE5","PAR_ASE6","PAR_ASE7","PAR_ASE8","PAR_ASE24", "PAR_ASE30","PAR_ASE23", "PAR_ASC", "PAR_ASC_V", "PAR_SFM_MV", "PAR_ASE_M", "PAR_ASE_MV", "PAR_PEAK_RMS_TOT", "PAR_ASS_V", "PAR_THR_3RMS_TOT", "PAR_THR_2RMS_TOT", "PAR_THR_1RMS_TOT", "PAR_SC_V", "PAR_SFMV16", "PAR_SFMV15")
+ X_subset = music[var]
+ X_subset$PAR_SC_V=log(X_subset$PAR_SC_V)
+ X_subset$PAR_ASC_V=log(X_subset$PAR_ASC_V)
+ X_subset = scale(X_subset)
+ 
+ Y = music$GENRE
+ Y = music$GENRE == 'Classical'
+ X_train = X_subset[train,]
+ Y_train = Y[train]
+ X_test = X_subset[!train,]
+ Y_test = Y[!train]
+
+ accura=c()
+ for (i in xaxis) {
+   res.knn=knn(X_train,X_test,cl=Y_train,k=i)
+   accura=c(accura,sum(res.knn==Y_test)/length(Y_test)*100)
+ }
+ X_subset = music[-p]
+ X_subset = X_subset[-148:-167] #j'enl?ve quand meme les r?p?titions
+ train=sample(c(TRUE, FALSE), n, rep=TRUE, prob=c(2/3, 1/3))
+ X_subset$PAR_SC_V=log(X_subset$PAR_SC_V)
+ X_subset$PAR_ASC_V=log(X_subset$PAR_ASC_V)
+X_subset = scale(X_subset)
+ Y = music$GENRE == 'Classical'
+ X_train = X_subset[train,]
+ Y_train = Y[train]
+ X_test = X_subset[!train,]
+ Y_test = Y[!train]
+ accura_tot=c()
+ for (i in xaxis) {
+   res.knn=knn(X_train,X_test,cl=Y_train,k=i)
+   accura_tot=c(accura_tot,sum(res.knn==Y_test)/length(Y_test)*100)
+ }
+```
+
+```{r, echo=FALSE, fig.width=7,fig.height=4, fig.align='center'}
+par(mfrow=c(1,2))
+matplot(xaxis,accura,col=2,pch=2,xlab = "k",ylab = "% de bonnes réponses (accuracy)",ylim = c(88,96))
+title("Taux de bonnes réponses \n (ModT)")
+matplot(xaxis,accura_tot,col=3,pch=2,xlab = "k",ylab = "% de bonnes réponses (accuracy)",ylim = c(88,96))
+title("Taux de bonnes réponses \n (toute variables)")
+par(mfrow=c(1,1))
+```
+
+## Partie 3: Regression de Ridge
+### 1. Intérêt: 
+La methode Ridge est une methode de régularisation en classification supervisée. Cette methode a généralement pour but de palier aux contraintes du "cadre des grandes dimensions" (jeu de données où le nombre de variables est plus important que le nombre d'observations). L'objectif est alors d'ajouter une contrainte afin de pouvoir malgré tout conserver nos variables explicatives malgré la non injectivité. L'inconvénient réside dans le fait que l'estimateur obtenu est biaisé mais que sa variance est meilleure que celle obtenue par les moindres carré. Il faut alors trouver un compromis biais/variance.
+
+Notre étude vise la classification du genre des musiques et non la détermination des paramètres les plus significatifs différenciant les deux. Ainsi, nous ne cherchons pas forcément à éliminer des variables de notre modèle, c'est un avantage. Dans notre cas, le nombre de paramètres est de 191 pour 6447 individus, nous ne somme pas dans un cas avec un problème d'injectivité. Néanmoins nous avons certaines variables fortement corrélées, ce qui pose bien entendu problème dans le cadre d'une régression classique. C'est là que la regression de Ridge intervient puisqu'elle permet justement de traiter le cas de variables corrélées.
+
+### 2. Regression Ridge :
+Pour des valeurs de $\lambda$ très grandes (comme $10^{10}$) les coefficients prédits tendent vers 0, à l'inverse, pour des valeurs faibles de $\lambda$ et se rapprochant de 0 (comme $10^{-2}$) l'estimateur de Ridge tend vers l'EMCO.
+```{r, echo=FALSE, fig.width=7,fig.height=5, fig.align='center'}
+library(glmnet)
+
+set.seed(103)
+train=sample(c(TRUE, FALSE), n, rep=TRUE, prob=c(2/3, 1/3)) 
+
+X_subset = music[-p] 
+var = c("PAR_SFM_M", "PAR_SC", "PAR_ASE1", "PAR_ASE2", "PAR_ASE3", "PAR_ASE4","PAR_ASE5","PAR_ASE6","PAR_ASE7","PAR_ASE8","PAR_ASE24", "PAR_ASE30","PAR_ASE23", "PAR_ASC", "PAR_ASC_V", "PAR_SFM_MV", "PAR_ASE_M", "PAR_ASE_MV", "PAR_PEAK_RMS_TOT", "PAR_ASS_V", "PAR_THR_3RMS_TOT", "PAR_THR_2RMS_TOT", "PAR_THR_1RMS_TOT", "PAR_SC_V", "PAR_SFMV16", "PAR_SFMV15")
+X_subset = X_subset[var] 
+X_subset$PAR_SC_V=log(X_subset$PAR_SC_V)
+X_subset$PAR_ASC_V=log(X_subset$PAR_ASC_V)
+# X_subset = music[-p]
+# X_subset = X_subset[-148:-167] #j'enlï¿½ve quand meme les rï¿½pï¿½titions 
+Y = 1*(music$GENRE == 'Classical')
+X_train = X_subset[train,]
+Y_train = Y[train]
+X_test = X_subset[!train,]
+Y_test = Y[!train]
+
+
+grid=10^seq(10,-2,length=100)
+x=as.matrix(X_train)
+y=as.matrix(Y_train)
+ridge.fit=glmnet(x,y,alpha=0,lambda=grid)
+coef.ridge=coef(ridge.fit)[-1,] # l'intercept n'apporte rien
+# Ces graphiques reprï¿½sentent les trajectoires des coordonnï¿½s de l'estimateur en fonction de la norme L1 ou L2 de l'estimateur.
+```
+
+Traçons les graphiques des trajectoires des coordonnées de l'estimateur en fonction de la norme L1 ou L2 de cet estimateur pour les variables du modèle T:
+
+```{r,echo=TRUE, fig.width=14,fig.height=8, fig.align='center'}
+par(mfrow=c(1,2))
+###### Norme L2
+matplot(apply(coef.ridge^2,2,mean),t(coef.ridge), main="Ridge norme L2",
+        col=1:length(names(X_train)), lty=length(names(X_train)), type="l",
+        xlab="norme L2", ylab="coefficients")
+
+legend("bottomleft", names(X_train),lty=1:length(names(X_train)),
+       col=1:length(names(X_train)),cex=0.5)
+
+###### Norme L1
+matplot(apply(abs(coef.ridge),2,sum),t(coef.ridge), main="Ridge norme L1",
+        col=1:length(names(X_train)),lty=1:length(names(X_train)),type="l",
+        xlab="norme L1", ylab="coefficients")  
+
+legend("bottomleft", names(X_train),lty=1:length(names(X_train)),
+       col=1:length(names(X_train)),cex=0.5)
+```
+
+Le résultat de la fonction $plot$ est le suivant, il correspond aux trajectoires des coordonnées de l'estimateur en fonction de la norme L1. Le $26$ correspondant au nombre de variables.
+
+```{r,echo=TRUE, fig.width=5,fig.height=4, fig.align='center'}
+###### Plot classique
+par(mfrow=c(1,1))
+plot(ridge.fit)
+```
+
+En conservant toutes les variables^[hors variables 148 à 167 et en passant au log SC_V et ASC_V]
+
+```{r, echo=FALSE, fig.width=7,fig.height=5, fig.align='center'}
+library(glmnet)
+
+set.seed(103)
+train=sample(c(TRUE, FALSE), n, rep=TRUE, prob=c(2/3, 1/3)) 
+X_subset = music[-p] 
+X_subset = X_subset[-148:-167]
+X_subset$PAR_SC_V=log(X_subset$PAR_SC_V)
+X_subset$PAR_ASC_V=log(X_subset$PAR_ASC_V)
+# X_subset = music[-p]
+# X_subset = X_subset[-148:-167] #j'enlï¿½ve quand meme les rï¿½pï¿½titions 
+Y = 1*(music$GENRE == 'Classical')
+X_train = X_subset[train,]
+Y_train = Y[train]
+X_test = X_subset[!train,]
+Y_test = Y[!train]
+
+
+grid=10^seq(10,-2,length=100)
+x=as.matrix(X_train)
+y=as.matrix(Y_train)
+ridge.fit=glmnet(x,y,alpha=0,lambda=grid)
+coef.ridge=coef(ridge.fit)[-1,] # l'intercept n'apporte rien
+# Ces graphiques reprï¿½sentent les trajectoires des coordonnï¿½s de l'estimateur en fonction de la norme L1 ou L2 de l'estimateur.
+```
+
+```{r,echo=TRUE, fig.width=10,fig.height=5, fig.align='center'}
+par(mfrow=c(1,2))
+###### Norme L2
+matplot(apply(coef.ridge^2,2,mean),t(coef.ridge), main="Ridge norme L2",
+        col=1:length(names(X_train)), lty=length(names(X_train)), type="l",
+        xlab="norme L2", ylab="coefficients")
+# legend("bottomleft", names(X_train),lty=1:length(names(X_train)),
+#       col=1:length(names(X_train)),cex=0.5)
+
+###### Norme L1
+matplot(apply(abs(coef.ridge),2,sum),t(coef.ridge), main="Ridge norme L1",
+        col=1:length(names(X_train)),lty=1:length(names(X_train)),type="l",
+        xlab="norme L1", ylab="coefficients")  
+# legend("bottomleft", names(X_train),lty=1:length(names(X_train)),
+#       col=1:length(names(X_train)),cex=0.5)
+```
+
+### 3. Validation croisée :
+
+Nous appliquons une validation croisée à 10 segments pour deux modèles : d'une part au modèle T et d'autre part sur le modèle conservant toutes les variables^[hors variables 148 à 167 et en passant au log SC_V et ASC_V].
+
+La valitation croisée sur dix segments consiste à générer le modèle à partir de 9 parties de l'ensemble de données et de calculer sa performance sur le 10 ième. On fait cela 10 fois en alternant les plis. On fait alors la moyenne des erreurs de prédiction sur les 10 plis isolés. 
+
+On obtient ainsi l'EQMP (erreur quadratique moyenne de prévision). Ainsi cette estimation de la performance calculée par validation croisée permet de selectionner un modèle (et donc un lambda dans le cas du modèle de Ridge) pour classifier nos données.
+
+```{r,echo=FALSE, fig.width=10,fig.height=5, fig.align='center'}
+set.seed(314)
+train=sample(c(TRUE, FALSE), n, rep=TRUE, prob=c(2/3, 1/3)) 
+par(mfrow=c(1,2))
+
+
+################# Sur modèle T
+
+X_subset = music[-p] 
+var = c("PAR_SFM_M", "PAR_SC", "PAR_ASE1", "PAR_ASE2", "PAR_ASE3", "PAR_ASE4","PAR_ASE5",
+        "PAR_ASE6","PAR_ASE7","PAR_ASE8","PAR_ASE24", "PAR_ASE30","PAR_ASE23", "PAR_ASC",
+        "PAR_ASC_V", "PAR_SFM_MV", "PAR_ASE_M", "PAR_ASE_MV", "PAR_PEAK_RMS_TOT", 
+        "PAR_ASS_V", "PAR_THR_3RMS_TOT", "PAR_THR_2RMS_TOT", "PAR_THR_1RMS_TOT", "PAR_SC_V",
+        "PAR_SFMV16", "PAR_SFMV15")
+X_subset = X_subset[var] 
+X_subset$PAR_SC_V=log(X_subset$PAR_SC_V)
+X_subset$PAR_ASC_V=log(X_subset$PAR_ASC_V)
+# X_subset = music[-p]
+# X_subset = X_subset[-148:-167] #j'enlï¿½ve quand meme les rï¿½pï¿½titions 
+Y = 1*(music$GENRE == 'Classical')
+X_train = X_subset[train,]
+Y_train = Y[train]
+X_test = X_subset[!train,]
+Y_test = Y[!train]
+
+
+x=as.matrix(X_train)
+y=as.matrix(Y_train)
+cv.ridge=cv.glmnet(x,y,alpha=0,nfolds=10,family="binomial")   
+
+# bestlambda=cv.ridge$lambda.min
+# ridge.accu=calcul_accuracy_ridge(X_test,Y_test,Y_train,cv.ridge,bestlambda)
+
+plot(cv.ridge)
+# predict(ridge.fit,s=bestlambda,type="coefficients")  # aucun n'est nul on ne selectionne pas de var avec ridge
+
+################# Sur tout
+
+X_subset = music[-p] 
+X_subset$PAR_SC_V=log(X_subset$PAR_SC_V)
+X_subset$PAR_ASC_V=log(X_subset$PAR_ASC_V)
+X_subset = X_subset[-148:-167] #j'enlï¿½ve quand meme les rï¿½pï¿½titions
+Y = 1*(music$GENRE == 'Classical')
+X_train_tot = X_subset[train,]
+Y_train_tot = Y[train]
+X_test_tot = X_subset[!train,]
+Y_test_tot = Y[!train]
+
+
+x=as.matrix(X_train_tot)
+y=as.matrix(Y_train_tot)
+cv.ridge_tot=cv.glmnet(x,y,alpha=0,nfolds=10,family="binomial")   
+
+# bestlambda_tot=cv.ridge$lambda.min
+# ridge_tot.accu=calcul_accuracy_ridge(X_test_tot,Y_test_tot,Y_train,cv.ridge_tot,bestlambda_tot)
+
+plot(cv.ridge_tot)
+# predict(ridge.fit,s=bestlambda,type="coefficients")  # aucun n'est nul on ne selectionne pas de var avec ridge
+```
+
+
+```{r,echo=FALSE, fig.width=8,fig.height=5, fig.align='center'}
+par(mfrow=c(1,1))
+# estimation de l'erreur sur l'ï¿½chantillon de test
+bestlambda=cv.ridge$lambda.min
+ridge.pred=predict(cv.ridge,s=bestlambda,newx=as.matrix(X_test))
+
+print(paste0("EQM modT=",mean((ridge.pred-as.matrix(Y_test))^2)),quote=FALSE)                     
+
+#Classifieur de base
+predRid = prediction(ridge.pred, Y_test)
+
+ridge.accu=calcul_accuracy_ridge(X_test,Y_test,X_train,Y_train,cv.ridge,predRid)
+
+perfRid = performance(predRid, measure = 'tpr', x.measure = 'fpr')
+
+perfRid.auc = performance(predRid, "auc")
+aucRid = round(perfRid.auc@y.values[[1]],3)
+##############################################################################
+bestlambda_tot=cv.ridge_tot$lambda.min
+ridge.pred_tot=predict(cv.ridge_tot,s=bestlambda_tot,newx=as.matrix(X_test_tot))
+
+
+print(paste0("EQM total=",mean((ridge.pred_tot-as.matrix(Y_test_tot))^2)),quote=FALSE)                    
+
+#Classifieur de base
+predRid_tot = prediction(ridge.pred_tot, Y_test_tot)
+
+ridge_tot.accu=calcul_accuracy_ridge(X_test_tot,Y_test_tot,X_train_tot,Y_train_tot,cv.ridge_tot,predRid_tot)
+
+perfRid_tot = performance(predRid_tot, measure = 'tpr', x.measure = 'fpr')
+
+perfRid_tot.auc = performance(predRid_tot, "auc")
+aucRid_tot = round(perfRid_tot.auc@y.values[[1]],3)
+#############################################################################
+plot(perfRid,col="blue")
+plot(perfRid_tot,col="red",add=TRUE)
+title("Courbe ROC regression de ridge")
+legend("bottomright",legend=c(paste0("sur ModT  A=",aucRid),paste0("toute variables A=",aucRid_tot)),col=c("blue","red"),lty=c(1,1))
+```
+On remarque alors qu'avec une aire sous courbe de $94,6\%$ le modèle avec toute les variables^[hors variables 148 à 167 et en passant au log SC_V et ASC_V] est intéressant pour la classification des genres musicaux.
+
+### 4. Utilisation de toutes les variables :
+```{r}
+set.seed(4658)
+
+train=sample(c(TRUE, FALSE), n, rep=TRUE, prob=c(2/3, 1/3)) 
+X_subset = music[-p] 
+Y = 1*(music$GENRE == 'Classical')
+X_train_tout = X_subset[train,]
+Y_train_tout = Y[train]
+X_test_tout = X_subset[!train,]
+Y_test_tout = Y[!train]
+
+
+x=as.matrix(X_train_tout)
+y=as.matrix(Y_train_tout)
+cv.ridge_tout=cv.glmnet(x,y,alpha=0,nfolds=10,family="binomial")   
+# plot(cv.ridge)
+
+
+bestlambda_tout=cv.ridge_tout$lambda.min
+
+
+# estimation de l'erreur sur l'ï¿½chantillon de test
+bestlambda_tout=cv.ridge_tout$lambda.min
+ridge_tout.pred=predict(cv.ridge_tout,s=bestlambda_tout,newx=as.matrix(X_test_tout))
+
+#Classifieur de base
+bestlambda_tout=cv.ridge_tout$lambda.min
+ridge.pred_tout=predict(cv.ridge_tout,s=bestlambda_tout,newx=as.matrix(X_test_tout))
+
+print(paste0("EQM total=",mean((ridge.pred_tout-as.matrix(Y_test_tout))^2)),quote=FALSE)                    
+
+#Classifieur de base
+predRid_tout = prediction(ridge.pred_tout, Y_test_tout)
+ridge_tout.accu=calcul_accuracy_ridge(X_test_tout,Y_test_tout,X_train_tout,Y_train_tout,cv.ridge_tout,predRid_tout)
+perfRid_tout = performance(predRid_tout, measure = 'tpr', x.measure = 'fpr')
+
+perfRid_tout.auc = performance(predRid_tout, "auc")
+aucRid_tout = round(perfRid_tout.auc@y.values[[1]],3)
+plot(perfRid,col="blue")
+plot(perfRid_tot,col="red",add=TRUE)
+plot(perfRid_tout,col="green",add=TRUE)
+title("Courbe ROC régression de ridge")
+legend("bottomright",legend=c(paste0("sur ModT  A=",aucRid),paste0("toute variables A=",aucRid_tot),paste0("toute variables sans filtre A=",aucRid_tout)),col=c("blue","red","green"),lty=c(1,1,1))
+```
+
+On observe alors que la copie des données à une influence sur les performances qui sont légèrement meilleures. La copie des données donne alors plus de "poids" aux paramètres concernés, et si ces paramètres sont représentatifs pour notre ségrégation, ceci améliore notre classification. 
+
+```{r}
+result_mod=data.frame(cbind(c("ridge ModT","ridge toute variable filtrés","ridge toute variable sans filtres"),
+                             round(c(aucRid,aucRid_tot,aucRid_tout),3),
+                             round(c(ridge.accu,ridge_tot.accu,ridge_tout.accu),3)))
+names(result_mod)=c("Modèle","AIC","Accuracy")
+print(result_mod)
+```
+## Résumé de la démarche :
+
+Rappel de l’objectif : Différencier les musiques Classiques des musiques de Jazz, sur la base de multiples mesures (191 variables à notre disposition pour 6447 individus). Nous sommes en stratégie supervisée car nous avons un set labélisé à disposition. 
+
+Nous commençons l'étude par une analyse descriptive du jeu de données.
+Un rapide coup d'oeil sur les variables nous permet de constater qu’elles mesurent 16 paramètres physiques caractéristiques d'enregistrements musicaux. Certaines variables sont des mesures par bande de fréquence (ASE par exemple) et d'autres sont des agrégats. L'analyse descriptive révèle que les ordres de grandeurs très variables, et, plus grave : de nombreuses variables sont très corrélées. 
+
+Nous enchaînons avec une étape de pré-processing : il s’agit d’appliquer une transformation log aux variables présentant une étendue très élevée et des valeurs extrêmes. On élimine les variables en double (147 à 168). Et une PCA va nous aider à identifier les variables les plus importantes.
+
+Le cadre du problème (classification binaire) nous oriente directement vers une régression logistique. Nous élaborons différents modèles, que nous évaluons. Il s’avère que le plus performant est le modèle de sélection de variables par méthode *stepAIC*. Face au problème des variables très corrélées, nous choisissons d’appliquer ensuite une régression ridge, qui permet de palier à ce défaut. Les résultats sont très satisfaisants avec une précision de $91.33%$. Cependant, par nature, la régression logistique ne permet que de classifier deux genres maximum. Or, dans le challenge original, il s’agit de classifier de multiples genres musicaux. Ainsi, nous pensons à un nouveau modèle de classification : les KNN. Après avoir choisi les paramètres du modèle (limitation à un seul voisin notamment), on obtient des performances qui rivalisent totalement avec les régressions logistiques avec $94.82\%$.
+
+## Approfondissement :
+Etant donné le grand nombre de variables, nous avons pensé à des méthodes alternatives adaptées à la grande dimension : les *SVM* et les *Random Forest*. 
+
+# SVM :
+Conclusion : La SVM fournit de meilleurs résultats que toutes les méthodes précédentes avec $94.7\%$ de précision. A cela s’ajoute une efficacité algorithmique avantageuse contrairement à son concurrent le KNN.
+```{r, echo=FALSE, fig.width=8,fig.height=4, fig.align='center'}
+
+set.seed(103)
+train=sample(c(TRUE, FALSE), n, rep=TRUE, prob=c(2/3, 1/3)) 
+
+X_subset = music[,-p]
+X_subset$PAR_SC_V=log(X_subset$PAR_SC_V)
+X_subset$PAR_ASC_V=log(X_subset$PAR_ASC_V)
+X_subset= scale(X_subset)
+
+Y = music$GENRE
+Y = music$GENRE == 'Classical'
+X_train = X_subset[train,]
+Y_train = Y[train]
+X_test = X_subset[!train,]
+Y_test = Y[!train]
+
+library(e1071)
+reg.svm = svm(Y_train ~ ., data=X_train,type='C', kernel = 'linear', scale=F)
+print(reg.svm)
+pred.svm = predict(reg.svm, newdata = X_test)
+acc.linear = round(sum(Y_test == pred.svm) / length(Y_test), 3)
+
+reg.svm = svm(Y_train ~ ., data=X_train,type='C', kernel = 'sigmoid', scale=F)
+print(reg.svm)
+pred.svm2 = predict(reg.svm, newdata = X_test)
+acc.sigmoid = round(sum(Y_test == pred.svm2) / length(Y_test), 3)
+
+reg.svm = svm(Y_train ~ ., data=X_train,type='C', kernel = 'polynomial', degree=2, scale=F)
+print(reg.svm)
+pred.svm3 = predict(reg.svm, newdata = X_test)
+acc.poly2 = round(sum(Y_test == pred.svm3) / length(Y_test), 3)
+
+
+```
+
+# Random Forests : 
+Conclusion : De même que pour les SVM, les Random Forests fournissent des résultats assez bons. De plus, elles ont l'avantage d'être explicatives, ce qui est un avantage très intéressant si l’on veut comprendre pourquoi telle musique a été classifiée tel genre. C’est une méthode qui est beaucoup moins une boîte noire que pourrait l’être une régression logistique. 
+
+```{r, echo=FALSE, fig.width=8,fig.height=4, fig.align='center'}
+set.seed(103)
+train=sample(c(TRUE, FALSE), n, rep=TRUE, prob=c(2/3, 1/3)) 
+
+X_subset = music[,-p]
+X_subset$PAR_SC_V=log(X_subset$PAR_SC_V)
+X_subset$PAR_ASC_V=log(X_subset$PAR_ASC_V)
+X_subset= scale(X_subset)
+
+Y = music$GENRE
+Y = music$GENRE == 'Classical'
+X_train = X_subset[train,]
+Y_train = Y[train]
+X_test = X_subset[!train,]
+Y_test = Y[!train]
+
+library(randomForest)
+reg.forest = randomForest(Y_train ~ ., data=X_train, ntree=200)
+print(reg.forest)
+acc.rf = round(calcul_accuracy(X_test, Y_test, Y_train, reg.forest)*100, 3)
+```
+
+```{r, echo=FALSE, fig.width=8,fig.height=4, fig.align='center'}
+#Visualisation des perfs : 
+taux_bonnes_rep = c(svm.linear = acc.linear*100, svm.poly2 = acc.poly2*100, svm.sigm = acc.sigmoid*100, RF = acc.rf)
+bp = barplot(taux_bonnes_rep, pch=20, ylim=c(0, 100), main='taux de bonnes réponses', legend=rownames(taux_bonnes_rep))
+text(bp, taux_bonnes_rep/2, taux_bonnes_rep)
+```
+
+## Conclusion:
+En conclusion, nous remarquons que le modèle le plus performant est celui issu de la méthode des KNN avec un taux de bonne réponses de $94,8\%$. Suivi de la régression de logistique du ```stepwise``` avec $91\%$ puis Ridge avec $89,5\%$. 
+Cependant il est faut remarquer que de se baser uniquement sur le taux de bonnes réponses n’est pas toujours un critère optimal. En effet dans certains tests il est pertinent de vouloir une plus grande spécificité (par exemple dans les test sérologiques) ou au contraire une plus grande sensibilité (par exemple lors d’une recherche sur un moteur de recherche d’une musique par exemple). Dans le cas de ce choix plus fin, il est nécessaire d’avoir une méthode paramétrique, les KNN sont alors hors-jeux car nous le pouvons pas choisir ce compromis même si la spécificité et sensibilité est bonne, par exemple dans le cas médical on préfère des spécificité de $95\%$ ici elle n’est que de $90\%$.
+
+Ainsi au sein des méthode paramétriques c’est le modèle du stepwise de *ModAIC* qui l’emporte avec une aire sous courbe la plus importante de $96,6\%$.
+Néanmoins si nous voulions généraliser notre étude dans le cadre du jeu de données qui initialement contient plus de 2 genres musicaux, il serait nécessaire de préférer l’algorithme des KNN.
+C’est pour cela que nous avons approfondi notre étude avec deux méthodes adaptées à cette contrainte. D’une part la *SVM* à noyau polynomial de degré 2 qui est une méthode adaptée aux grandes dimensions et qui permet la classification multiple. Et d’autre part l’algorithme des *Random Forest*, qui permet d’ajouter de l’explicativité à la prise de décision d’une classe. Finalement ces deux méthodes donnent des performances comparables aux autres traitées dans ce sujet. 
+En terme de complexité algorithmique l’avantage des régressions logistique ou de ridge est qu’une fois les coefficients calculés et le seuil défini, la complexité est de l’ordre du nombre de variables. Contrairement aux KNN où la complexité est bien plus élevée car au moins quadratique en nombre d’individus. Les randoms forest quant à elles bénéficient d’une complexité logarithmique ! Ainsi en fonction de l’usage de cette classification et des ressources à disposition ce critère peut être déterminant.  
