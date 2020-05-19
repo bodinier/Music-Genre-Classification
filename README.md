@@ -1,2 +1,4 @@
-# Reconnaissance-de-genre-de-musique
-Créer un modèle de reconnaissance de musique (Jazz ou Classique)
+# Music genre classification
+
+We built different models on R to perform music genre classification (**Logistic & Ridge Regression / SVM / Random Forests**).
+We achieve **94.8% accuracy** with Random Forests.
